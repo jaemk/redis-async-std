@@ -91,21 +91,38 @@ async fn eval(conn: &mut Connection, cmd: &str) -> Result<String> {
     Ok(lines.join(" "))
 }
 
-async fn prompt(p: &str) -> Result<String> {
+enum PromptInput {
+    EOF,
+    S(String),
+}
+
+async fn prompt(p: &str) -> Result<PromptInput> {
     let mut out = stdout();
     out.write_all(p.as_bytes()).await?;
     out.flush().await?;
     let mut s = String::new();
     stdin().read_line(&mut s).await?;
-    Ok(s)
+    if s.is_empty() {
+        Ok(PromptInput::EOF)
+    } else {
+        Ok(PromptInput::S(s.trim_end_matches("\n").to_string()))
+    }
 }
 
 async fn run(addr: impl ToSocketAddrs) -> Result<()> {
     let mut conn = Connection::open(addr).await?;
+    let prompt_str = format!("redis({})> ", conn.addr().await?);
     loop {
-        let input = prompt(&format!("redis({})> ", conn.addr().await?)).await?;
-        if input.trim().is_empty() { continue; }
-        let res = eval(&mut conn, &input).await?;
+        let resp = prompt(&prompt_str).await?;
+        let input = match resp {
+            PromptInput::EOF => Err("exit")?,
+            PromptInput::S(ref s) => {
+                let s = s.trim();
+                if s.is_empty() { continue; }
+                s
+            }
+        };
+        let res = eval(&mut conn, input).await?;
         println!("result: {}", res);
     }
 }
@@ -115,6 +132,6 @@ pub fn main() {
     let r = task::block_on(run("127.0.0.1:6379"));
 
     if let Err(e) = r {
-        eprintln!("error: {}", e);
+        eprintln!("\nerror: {}", e);
     };
 }
